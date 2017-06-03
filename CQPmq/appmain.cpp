@@ -5,8 +5,9 @@
 */
 
 #include "stdafx.h"
-#include "string"
 #include <cinttypes>
+#include <string>
+#include <sstream>
 #include "cqp.h"
 #include "beanstalk.h"
 #include "appmain.h" //应用AppID等信息，请正确填写，否则酷Q可能无法加载
@@ -28,14 +29,15 @@ string in_q = "coolq_in";
 string out_q = "coolq_out";
 
 
-int send_to_mq(string msg) {
+int send_to_mq(char* msg) {
 	if (!btdclient.is_connected()) {
 		CQ_addLog(ac, CQLOG_WARNING, "连接", "未连接");
 		return -1;
 	}
-	sprintf_s(log_buf, "发送: %s", msg.c_str());
+	sprintf_s(log_buf, "发送: %s", msg);
 	CQ_addLog(ac, CQLOG_DEBUG, "消息", log_buf);
 	int64_t id = btdclient.put(msg);
+	free(msg);
 	return 0;
 }
 
@@ -143,8 +145,19 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 
 	//如果要回复消息，请调用酷Q方法发送，并且这里 return EVENT_BLOCK - 截断本条消息，不再继续处理  注意：应用优先级设置为"最高"(10000)时，不得使用本返回值
 	//如果不回复消息，交由之后的应用/过滤器处理，这里 return EVENT_IGNORE - 忽略本条消息
-	
-	//send_to_mq();
+	int32_t msg_len = sizeof(msg);
+	int32_t msg_type = 21;
+	char *msg_buf = new char[4 + 4 + 4 + 8 + msg_len + 4];
+
+	memcpy(msg_buf, &msg_type, 4);
+	memcpy(msg_buf + 4, &subType, 4);
+	memcpy(msg_buf + 4 + 4, &sendTime, 4);
+	memcpy(msg_buf + 4 + 4 + 4, &fromQQ, 8);
+	memcpy(msg_buf + 4 + 4 + 4 + 8, &msg, msg_len);
+	memcpy(msg_buf + 4 + 4 + 4 + 8 + msg_len, &font, 4);
+
+	send_to_mq(msg_buf);
+
 	return EVENT_IGNORE;
 }
 
