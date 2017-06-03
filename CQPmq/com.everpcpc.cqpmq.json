@@ -4,11 +4,11 @@
 {
     "ret":1,					// 返回码，固定为1
     "apiver":9,					// Api版本，本SDK为9
-    "name":"酷Q消息队列交互",	// 应用名称
+    "name":"消息队列",	// 应用名称
     "version":"1.0.0",			// 应用版本
     "version_id":1,				// 应用顺序版本（每次发布时至少+1）
     "author":"everpcpc",			// 应用作者
-    "description":"将收到的消息发送到外部的消息队列服务器，从外部的消息队列服务器读取消息并处理。\r\n目前所用的是 beanstalkd。",
+    "description":"将收到的消息发送到外部的消息队列服务器 & 从外部的消息队列服务器读取消息并处理。\r\n目前所用的是 beanstalkd。",
     "event":[					// 事件列表，同一事件类型可重复定义（发布前请删除无用事件）
         {
             "id":1,							// 事件ID
@@ -116,8 +116,6 @@
 
     ],
     "auth":[		// 应用权限（发布前请删除无用权限）
-		//20,  //[敏感]取Cookies	getCookies / getCsrfToken
-		//30,  //接收语音			getRecord
         101,  //发送群消息			sendGroupMsg
         103,  //发送讨论组消息		sendDiscussMsg
         106,  //发送私聊消息		sendPrivateMsg

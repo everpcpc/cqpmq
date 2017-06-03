@@ -6,14 +6,38 @@
 
 #include "stdafx.h"
 #include "string"
+#include <cinttypes>
 #include "cqp.h"
+#include "beanstalk.h"
 #include "appmain.h" //应用AppID等信息，请正确填写，否则酷Q可能无法加载
 
 using namespace std;
+using namespace Beanstalk;
 
 int ac = -1; //AuthCode 调用酷Q的方法时需要用到
 bool enabled = false;
 
+int64_t qq = -1;
+char log_buf[1024];
+
+Client btdclient;
+string mq_host = "saki.everpcpc.com";
+int mq_port = 11300;
+
+string in_q = "coolq_in";
+string out_q = "coolq_out";
+
+
+int send_to_mq(string msg) {
+	if (!btdclient.is_connected()) {
+		CQ_addLog(ac, CQLOG_WARNING, "连接", "未连接");
+		return -1;
+	}
+	sprintf_s(log_buf, "发送: %s", msg.c_str());
+	CQ_addLog(ac, CQLOG_DEBUG, "消息", log_buf);
+	int64_t id = btdclient.put(msg);
+	return 0;
+}
 
 /* 
 * 返回应用的ApiVer、Appid，打包后将不会调用
@@ -40,7 +64,7 @@ CQEVENT(int32_t, Initialize, 4)(int32_t AuthCode) {
 */
 CQEVENT(int32_t, __eventStartup, 0)() {
 
-	CQ_addLog(ac, CQLOG_INFO, "提示信息", "MQ启动啦喵~");
+	CQ_addLog(ac, CQLOG_DEBUG, "提示", "插件启动啦喵~");
 
 	return 0;
 }
@@ -53,6 +77,9 @@ CQEVENT(int32_t, __eventStartup, 0)() {
 */
 CQEVENT(int32_t, __eventExit, 0)() {
 
+	CQ_addLog(ac, CQLOG_DEBUG, "连接", "断开连接，886~");
+	btdclient.disconnect();
+
 	return 0;
 }
 
@@ -64,6 +91,32 @@ CQEVENT(int32_t, __eventExit, 0)() {
 */
 CQEVENT(int32_t, __eventEnable, 0)() {
 	enabled = true;
+
+	qq = CQ_getLoginQQ(ac);
+	if (qq < 0) {
+		CQ_addLog(ac, CQLOG_ERROR, "提示", "获取不到已登录的QQ号呢");
+		return -1;
+	}
+	sprintf_s(log_buf, "登录的 QQ 号为: %" PRId64, qq);
+	CQ_addLog(ac, CQLOG_DEBUG, "提示", log_buf);
+
+	sprintf_s(log_buf, "尝试连接：%s:%d...", mq_host.c_str(), mq_port);
+	CQ_addLog(ac, CQLOG_DEBUG, "连接", log_buf);
+	try {
+		btdclient.connect(mq_host, mq_port);
+	}
+	catch (runtime_error) {
+		CQ_addLog(ac, CQLOG_ERROR, "连接", "连不上，地址写错了喵？");
+		return -1;
+	}
+	
+	out_q = to_string(qq) + "_out";
+	in_q = to_string(qq) + "_in";
+	sprintf_s(log_buf, "连接成功，使用：%s，监听：%s", out_q.c_str(), in_q.c_str());
+	CQ_addLog(ac, CQLOG_DEBUG, "连接", log_buf);
+	btdclient.use(out_q);
+	btdclient.watch(in_q);
+
 	return 0;
 }
 
@@ -76,6 +129,8 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 */
 CQEVENT(int32_t, __eventDisable, 0)() {
 	enabled = false;
+	CQ_addLog(ac, CQLOG_DEBUG, "提示", "停用了，断开连接喵～");
+	btdclient.disconnect();
 	return 0;
 }
 
@@ -88,8 +143,8 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 
 	//如果要回复消息，请调用酷Q方法发送，并且这里 return EVENT_BLOCK - 截断本条消息，不再继续处理  注意：应用优先级设置为"最高"(10000)时，不得使用本返回值
 	//如果不回复消息，交由之后的应用/过滤器处理，这里 return EVENT_IGNORE - 忽略本条消息
-	CQ_addLog(ac, CQLOG_INFO, "收到信息", msg);
-	CQ_sendPrivateMsg(ac, fromQQ, msg);
+	
+	//send_to_mq();
 	return EVENT_IGNORE;
 }
 
