@@ -1,7 +1,7 @@
 /*
-* CoolQ Demo for VC++ 
+* CoolQ MQ for VC++ 
 * Api Version 9
-* Written by Coxxs & Thanks for the help of orzFly
+* Written by everpcpc, based on cqsdk-vc
 */
 
 #include "stdafx.h"
@@ -39,6 +39,8 @@ CQEVENT(int32_t, Initialize, 4)(int32_t AuthCode) {
 * 如非必要，不建议在这里加载窗口。（可以添加菜单，让用户手动打开窗口）
 */
 CQEVENT(int32_t, __eventStartup, 0)() {
+
+	CQ_addLog(ac, CQLOG_INFO, "提示信息", "MQ启动啦喵~");
 
 	return 0;
 }
@@ -86,6 +88,8 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 
 	//如果要回复消息，请调用酷Q方法发送，并且这里 return EVENT_BLOCK - 截断本条消息，不再继续处理  注意：应用优先级设置为"最高"(10000)时，不得使用本返回值
 	//如果不回复消息，交由之后的应用/过滤器处理，这里 return EVENT_IGNORE - 忽略本条消息
+	CQ_addLog(ac, CQLOG_INFO, "收到信息", msg);
+	CQ_sendPrivateMsg(ac, fromQQ, msg);
 	return EVENT_IGNORE;
 }
 
