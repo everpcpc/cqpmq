@@ -27,7 +27,7 @@ unsigned tid;
 HANDLE thd;
 
 Client btdclient;
-char* SERVER_ADDR = "127.0.0.1";
+string SERVER_ADDR = "127.0.0.1";
 int SERVER_PORT = 11300;
 
 string in_q = "coolq_in";
@@ -166,13 +166,15 @@ int read_config() {
 		value.clear();
 	}
 
-	char *buffer = new char[256];
+	char *buffer = new char[50];
 	GetPrivateProfileStringA("btd", "addr", "-1", buffer, 64, configFile.data());
 	if (strcmp("-1", buffer)) {
-		SERVER_ADDR = buffer;
+		stringstream ss;
+		ss << buffer;
+		ss >> SERVER_ADDR;
 	}
 	else {
-		WritePrivateProfileStringA("btd", "addr", SERVER_ADDR, configFile.data());
+		WritePrivateProfileStringA("btd", "addr", SERVER_ADDR.c_str(), configFile.data());
 	}
 	delete[] buffer;
 
@@ -247,7 +249,7 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 		CQ_addLog(ac, CQLOG_WARNING, "info", log_buf);
 	}
 
-	sprintf_s(log_buf, "try connect: %s:%d...", SERVER_ADDR, SERVER_PORT);
+	sprintf_s(log_buf, "try connect: %s:%d...", SERVER_ADDR.c_str(), SERVER_PORT);
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
 
 	out_q = to_string(qq) + "_out";
