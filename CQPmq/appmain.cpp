@@ -37,16 +37,16 @@ string out_q = "coolq_out";
 bool ensure_mq_connected() {
 	if (btdclient.is_connected()) { return TRUE; }
 
-	CQ_addLog(ac, CQLOG_WARNING, "net", "未连接，尝试重连");
+	CQ_addLog(ac, CQLOG_WARNING, "net", "try reconnect");
 	try {
 		btdclient.reconnect();
 		btdclient.use(out_q);
 		btdclient.watch(in_q);
-		CQ_addLog(ac, CQLOG_INFO, "net", "重连OK");
+		CQ_addLog(ac, CQLOG_INFO, "net", "reconnect OK");
 
 	}
 	catch (runtime_error &e) {
-		sprintf_s(log_buf, "重连失败，：%s", e.what());
+		sprintf_s(log_buf, "reconnect failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
 		return FALSE;
 	}
@@ -56,17 +56,17 @@ bool ensure_mq_connected() {
 
 bool send_to_mq(const char* msg) {
 	if (!ensure_mq_connected()) {
-		CQ_addLog(ac, CQLOG_WARNING, "net", "未连接，不发消息");
+		CQ_addLog(ac, CQLOG_WARNING, "net", "no connection, will not send msg");
 		return FALSE;
 	}
 
-	sprintf_s(log_buf, "发送: %s", msg);
+	sprintf_s(log_buf, "send: %s", msg);
 	CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 	try {
 		btdclient.put(msg);
 	}
 	catch (runtime_error &e) {
-		sprintf_s(log_buf, "发送消息失败，：%s", e.what());
+		sprintf_s(log_buf, "send failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
 		btdclient.disconnect();
 		return FALSE;
@@ -96,7 +96,7 @@ bool process_msg(string msg) {
 		if (CQ_sendGroupMsg(ac, to, buffer) == 0) rc = TRUE;
 	}
 	else {
-		sprintf_s(log_buf, "暂不支持的消息类型: %s", msg_type.c_str());
+		sprintf_s(log_buf, "msg type not supported: %s", msg_type.c_str());
 		CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 	}
 
@@ -106,7 +106,7 @@ bool process_msg(string msg) {
 
 unsigned __stdcall get_from_mq(void *args) {
 
-	CQ_addLog(ac, CQLOG_DEBUG, "net", "开始从 MQ 接收消息");
+	CQ_addLog(ac, CQLOG_DEBUG, "net", "start receiving from mq");
 	while (TRUE) {
 		if (!ensure_mq_connected()) {
 			Sleep(10000);
@@ -118,7 +118,7 @@ unsigned __stdcall get_from_mq(void *args) {
 			btdclient.reserve(job, 60);  // 60s timeout for poll
 		}
 		catch (runtime_error &e) {
-			sprintf_s(log_buf, "接收消息失败，：%s", e.what());
+			sprintf_s(log_buf, "recv failed: %s", e.what());
 			CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
 			btdclient.disconnect();
 			Sleep(3000);
@@ -127,7 +127,7 @@ unsigned __stdcall get_from_mq(void *args) {
 
 		if (job.id() == 0) { continue; }
 
-		sprintf_s(log_buf, "收到: %s", job.body().c_str());
+		sprintf_s(log_buf, "recv: %s", job.body().c_str());
 		CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 
 		if (process_msg(job.body())) {
@@ -148,7 +148,7 @@ int read_config() {
 			CreateDirectoryA(configFolder.data(), NULL);
 		}
 		CloseHandle(CreateFileA(configFile.data(), GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL));
-		CQ_addLog(ac, CQLOG_INFO, "info", "配置文件不存在，以默认值自动生成");
+		CQ_addLog(ac, CQLOG_INFO, "info", "config file absent, will generate");
 	}
 
 	int port = GetPrivateProfileIntA("btd", "port", -1, configFile.data());
@@ -204,7 +204,7 @@ CQEVENT(int32_t, Initialize, 4)(int32_t AuthCode) {
 */
 CQEVENT(int32_t, __eventStartup, 0)() {
 
-	CQ_addLog(ac, CQLOG_DEBUG, "info", "插件启动啦喵~");
+	CQ_addLog(ac, CQLOG_DEBUG, "info", "start miao~");
 
 	return 0;
 }
@@ -232,22 +232,22 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 
 	qq = CQ_getLoginQQ(ac);
 	if (qq < 0) {
-		CQ_addLog(ac, CQLOG_ERROR, "info", "获取不到已登录的QQ号呢");
+		CQ_addLog(ac, CQLOG_ERROR, "info", "cannot get current qq");
 		return -1;
 	}
 
-	sprintf_s(log_buf, "登录的 QQ 号为: %" PRId64, qq);
+	sprintf_s(log_buf, "login with: %" PRId64, qq);
 	CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 
 	try {
 		read_config();
 	}
 	catch (runtime_error &e) {
-		sprintf_s(log_buf, "读取配置文件失败，将以默认配置运行: %s", e.what());
+		sprintf_s(log_buf, "read config failed，will use default: %s", e.what());
 		CQ_addLog(ac, CQLOG_WARNING, "info", log_buf);
 	}
 
-	sprintf_s(log_buf, "尝试连接：%s:%d...", SERVER_ADDR, SERVER_PORT);
+	sprintf_s(log_buf, "try connect: %s:%d...", SERVER_ADDR, SERVER_PORT);
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
 
 	out_q = to_string(qq) + "_out";
@@ -263,12 +263,12 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 		btdclient.watch(in_q);
 	}
 	catch (runtime_error &e) {
-		sprintf_s(log_buf, "连接失败：%s", e.what());
+		sprintf_s(log_buf, "connect failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_ERROR, "net", log_buf);
 		return -1;
 	}
 
-	sprintf_s(log_buf, "连接成功，使用：%s，监听：%s", out_q.c_str(), in_q.c_str());
+	sprintf_s(log_buf, "connect success, use: %s, listen: %s", out_q.c_str(), in_q.c_str());
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
 
 	thd = (HANDLE)_beginthreadex(NULL, 0, &get_from_mq, NULL, 0, &tid);
