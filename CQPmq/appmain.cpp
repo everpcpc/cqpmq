@@ -8,8 +8,10 @@
 #include <cinttypes>
 #include <string>
 #include <sstream>
+#include <process.h>
 #include "cqp.h"
 #include "beanstalk.h"
+#include "base64.h"
 #include "appmain.h" //应用AppID等信息，请正确填写，否则酷Q可能无法加载
 
 using namespace std;
@@ -21,6 +23,9 @@ bool enabled = false;
 int64_t qq = -1;
 char log_buf[1024];
 
+unsigned tid;
+HANDLE thd;
+
 Client btdclient;
 char* SERVER_ADDR = "127.0.0.1";
 int SERVER_PORT = 11300;
@@ -29,16 +34,110 @@ string in_q = "coolq_in";
 string out_q = "coolq_out";
 
 
-int send_to_mq(const char* msg) {
-	if (!btdclient.is_connected()) {
-		CQ_addLog(ac, CQLOG_WARNING, "net", "未连接");
-		return -1;
+bool ensure_mq_connected() {
+	if (btdclient.is_connected()) { return TRUE; }
+
+	CQ_addLog(ac, CQLOG_WARNING, "net", "未连接，尝试重连");
+	try {
+		btdclient.reconnect();
+		btdclient.use(out_q);
+		btdclient.watch(in_q);
+		CQ_addLog(ac, CQLOG_INFO, "net", "重连OK");
+
 	}
+	catch (runtime_error &e) {
+		sprintf_s(log_buf, "重连失败，：%s", e.what());
+		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+bool send_to_mq(const char* msg) {
+	if (!ensure_mq_connected()) {
+		CQ_addLog(ac, CQLOG_WARNING, "net", "未连接，不发消息");
+		return FALSE;
+	}
+
 	sprintf_s(log_buf, "发送: %s", msg);
 	CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
-	int64_t id = btdclient.put(msg);
+	try {
+		btdclient.put(msg);
+	}
+	catch (runtime_error &e) {
+		sprintf_s(log_buf, "发送消息失败，：%s", e.what());
+		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
+		btdclient.disconnect();
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+bool process_msg(string msg) {
+	bool rc = FALSE;
+	string msg_type, data;
+	int64_t to;
+	istringstream istr(msg);
+	istr >> msg_type;
+	char* buffer = new char[1024];
+
+	if (msg_type == "sendPrivateMsg") {
+		istr >> to;
+		istr >> data;
+		Base64decode(buffer, data.c_str());
+		if (CQ_sendPrivateMsg(ac, to, buffer) == 0) rc = TRUE;
+	}
+	else if (msg_type == "sendGroupMsg") {
+		istr >> to;
+		istr >> data;
+		Base64decode(buffer, data.c_str());
+		if (CQ_sendGroupMsg(ac, to, buffer) == 0) rc = TRUE;
+	}
+	else {
+		sprintf_s(log_buf, "暂不支持的消息类型: %s", msg_type.c_str());
+		CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
+	}
+
+	delete[] buffer;
+	return rc;
+}
+
+unsigned __stdcall get_from_mq(void *args) {
+
+	CQ_addLog(ac, CQLOG_DEBUG, "net", "开始从 MQ 接收消息");
+	while (TRUE) {
+		if (!ensure_mq_connected()) {
+			Sleep(10000);
+			continue;
+		}
+
+		Job job;
+		try {
+			btdclient.reserve(job, 60);  // 60s timeout for poll
+		}
+		catch (runtime_error &e) {
+			sprintf_s(log_buf, "接收消息失败，：%s", e.what());
+			CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
+			btdclient.disconnect();
+			Sleep(3000);
+			continue;
+		}
+
+		if (job.id() == 0) { continue; }
+
+		sprintf_s(log_buf, "收到: %s", job.body().c_str());
+		CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
+
+		if (process_msg(job.body())) {
+			btdclient.del(job);
+		};
+	}
+
 	return 0;
 }
+
 
 int read_config() {
 	string configFolder = ".\\app\\" CQAPPID;
@@ -68,14 +167,15 @@ int read_config() {
 	}
 
 	char *buffer = new char[256];
-	GetPrivateProfileStringA("btd", "addr", "localhost", buffer, 64, configFile.data());
-	if (strcmp("localhost", buffer)) {
+	GetPrivateProfileStringA("btd", "addr", "-1", buffer, 64, configFile.data());
+	if (strcmp("-1", buffer)) {
 		SERVER_ADDR = buffer;
 	}
 	else {
 		WritePrivateProfileStringA("btd", "addr", SERVER_ADDR, configFile.data());
 	}
 	delete[] buffer;
+
 	return 0;
 }
 
@@ -116,10 +216,8 @@ CQEVENT(int32_t, __eventStartup, 0)() {
 * 本函数调用完毕后，酷Q将很快关闭，请不要再通过线程等方式执行其他代码。
 */
 CQEVENT(int32_t, __eventExit, 0)() {
-
-	CQ_addLog(ac, CQLOG_DEBUG, "net", "断开连接，886~");
+	TerminateThread(thd, 0);  // FIXME
 	btdclient.disconnect();
-
 	return 0;
 }
 
@@ -132,32 +230,48 @@ CQEVENT(int32_t, __eventExit, 0)() {
 CQEVENT(int32_t, __eventEnable, 0)() {
 	enabled = true;
 
-	read_config();
-
 	qq = CQ_getLoginQQ(ac);
 	if (qq < 0) {
 		CQ_addLog(ac, CQLOG_ERROR, "info", "获取不到已登录的QQ号呢");
 		return -1;
 	}
+
 	sprintf_s(log_buf, "登录的 QQ 号为: %" PRId64, qq);
 	CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 
+	try {
+		read_config();
+	}
+	catch (runtime_error &e) {
+		sprintf_s(log_buf, "读取配置文件失败，将以默认配置运行: %s", e.what());
+		CQ_addLog(ac, CQLOG_WARNING, "info", log_buf);
+	}
+
 	sprintf_s(log_buf, "尝试连接：%s:%d...", SERVER_ADDR, SERVER_PORT);
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
-	try {
-		btdclient.connect(SERVER_ADDR, SERVER_PORT);
-	}
-	catch (runtime_error) {
-		CQ_addLog(ac, CQLOG_ERROR, "net", "连不上，地址写错了喵？");
-		return -1;
-	}
-	
+
 	out_q = to_string(qq) + "_out";
 	in_q = to_string(qq) + "_in";
+
+	if (btdclient.is_connected()) {
+		btdclient.disconnect();
+	}
+
+	try {
+		btdclient.connect(SERVER_ADDR, SERVER_PORT);
+		btdclient.use(out_q);
+		btdclient.watch(in_q);
+	}
+	catch (runtime_error &e) {
+		sprintf_s(log_buf, "连接失败：%s", e.what());
+		CQ_addLog(ac, CQLOG_ERROR, "net", log_buf);
+		return -1;
+	}
+
 	sprintf_s(log_buf, "连接成功，使用：%s，监听：%s", out_q.c_str(), in_q.c_str());
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
-	btdclient.use(out_q);
-	btdclient.watch(in_q);
+
+	thd = (HANDLE)_beginthreadex(NULL, 0, &get_from_mq, NULL, 0, &tid);
 
 	return 0;
 }
@@ -171,7 +285,7 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 */
 CQEVENT(int32_t, __eventDisable, 0)() {
 	enabled = false;
-	CQ_addLog(ac, CQLOG_DEBUG, "info", "停用了，断开连接喵～");
+	TerminateThread(thd, 0);  // FIXME
 	btdclient.disconnect();
 	return 0;
 }
@@ -185,16 +299,21 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 
 	//如果要回复消息，请调用酷Q方法发送，并且这里 return EVENT_BLOCK - 截断本条消息，不再继续处理  注意：应用优先级设置为"最高"(10000)时，不得使用本返回值
 	//如果不回复消息，交由之后的应用/过滤器处理，这里 return EVENT_IGNORE - 忽略本条消息
+
 	stringstream ss;
-	ss << 21 << '\36';
-	ss << subType << '\36';
-	ss << sendTime << '\36';
-	ss << fromQQ << '\36';
-	ss << msg << '\36';
-	ss << font << '\36';
+	char* buffer = new char[1024];
+	Base64encode(buffer, msg, sizeof(msg));
+
+	ss << "eventPrivateMsg" << " ";
+	ss << subType << " ";
+	ss << sendTime << " ";
+	ss << fromQQ << " ";
+	ss << buffer << " ";
+	ss << font << " ";
 
 	send_to_mq(ss.str().c_str());
 
+	delete[] buffer;
 	return EVENT_IGNORE;
 }
 
@@ -204,6 +323,22 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 */
 CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t fromGroup, int64_t fromQQ, const char *fromAnonymous, const char *msg, int32_t font) {
 
+	stringstream ss;
+	char* buffer = new char[1024];
+	Base64encode(buffer, msg, sizeof(msg));
+
+	ss << "eventGroupMsg" << " ";
+	ss << subType << " ";
+	ss << sendTime << " ";
+	ss << fromGroup << " ";
+	ss << fromQQ << " ";
+	ss << fromAnonymous << " ";
+	ss << buffer << " ";
+	ss << font << " ";
+
+	send_to_mq(ss.str().c_str());
+
+	delete[] buffer;
 	return EVENT_IGNORE; //关于返回值说明, 见“_eventPrivateMsg”函数
 }
 
@@ -213,6 +348,21 @@ CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t
 */
 CQEVENT(int32_t, __eventDiscussMsg, 32)(int32_t subType, int32_t sendTime, int64_t fromDiscuss, int64_t fromQQ, const char *msg, int32_t font) {
 
+	stringstream ss;
+	char* buffer = new char[1024];
+	Base64encode(buffer, msg, sizeof(msg));
+
+	ss << "eventDiscussMsg" << " ";
+	ss << subType << " ";
+	ss << sendTime << " ";
+	ss << fromDiscuss << " ";
+	ss << fromQQ << " ";
+	ss << buffer << " ";
+	ss << font << " ";
+
+	send_to_mq(ss.str().c_str());
+
+	delete[] buffer;
 	return EVENT_IGNORE; //关于返回值说明, 见“_eventPrivateMsg”函数
 }
 
