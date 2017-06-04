@@ -21,6 +21,7 @@ int ac = -1; //AuthCode 调用酷Q的方法时需要用到
 bool enabled = false;
 
 int64_t qq = -1;
+const int MSG_MAX_SIZE = 65535;
 char log_buf[1024];
 
 unsigned tid;
@@ -48,16 +49,16 @@ bool ensure_mq_connected() {
 	catch (runtime_error &e) {
 		sprintf_s(log_buf, "reconnect failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
-		return FALSE;
+		return false;
 	}
 
-	return TRUE;
+	return true;
 }
 
 bool send_to_mq(const char* msg) {
 	if (!ensure_mq_connected()) {
 		CQ_addLog(ac, CQLOG_WARNING, "net", "no connection, will not send msg");
-		return FALSE;
+		return false;
 	}
 
 	sprintf_s(log_buf, "send: %s", msg);
@@ -69,31 +70,31 @@ bool send_to_mq(const char* msg) {
 		sprintf_s(log_buf, "send failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
 		btdclient.disconnect();
-		return FALSE;
+		return false;
 	}
 
-	return TRUE;
+	return true;
 }
 
 bool process_msg(string msg) {
-	bool rc = FALSE;
+	bool rc = false;
 	string msg_type, data;
 	int64_t to;
 	istringstream istr(msg);
 	istr >> msg_type;
-	char* buffer = new char[1024];
+	char* buffer = new char[MSG_MAX_SIZE];
 
 	if (msg_type == "sendPrivateMsg") {
 		istr >> to;
 		istr >> data;
 		Base64decode(buffer, data.c_str());
-		if (CQ_sendPrivateMsg(ac, to, buffer) == 0) rc = TRUE;
+		if (CQ_sendPrivateMsg(ac, to, buffer) == 0) rc = true;
 	}
 	else if (msg_type == "sendGroupMsg") {
 		istr >> to;
 		istr >> data;
 		Base64decode(buffer, data.c_str());
-		if (CQ_sendGroupMsg(ac, to, buffer) == 0) rc = TRUE;
+		if (CQ_sendGroupMsg(ac, to, buffer) == 0) rc = true;
 	}
 	else {
 		sprintf_s(log_buf, "msg type not supported: %s", msg_type.c_str());
@@ -107,7 +108,7 @@ bool process_msg(string msg) {
 unsigned __stdcall get_from_mq(void *args) {
 
 	CQ_addLog(ac, CQLOG_DEBUG, "net", "start receiving from mq");
-	while (TRUE) {
+	while (true) {
 		if (!ensure_mq_connected()) {
 			Sleep(10000);
 			continue;
@@ -303,7 +304,7 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 	//如果不回复消息，交由之后的应用/过滤器处理，这里 return EVENT_IGNORE - 忽略本条消息
 
 	stringstream ss;
-	char* buffer = new char[1024];
+	char* buffer = new char[MSG_MAX_SIZE];
 	Base64encode(buffer, msg, sizeof(msg));
 
 	ss << "eventPrivateMsg" << " ";
@@ -326,7 +327,7 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t fromGroup, int64_t fromQQ, const char *fromAnonymous, const char *msg, int32_t font) {
 
 	stringstream ss;
-	char* buffer = new char[1024];
+	char* buffer = new char[MSG_MAX_SIZE];
 	Base64encode(buffer, msg, sizeof(msg));
 
 	ss << "eventGroupMsg" << " ";
@@ -351,7 +352,7 @@ CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t
 CQEVENT(int32_t, __eventDiscussMsg, 32)(int32_t subType, int32_t sendTime, int64_t fromDiscuss, int64_t fromQQ, const char *msg, int32_t font) {
 
 	stringstream ss;
-	char* buffer = new char[1024];
+	char* buffer = new char[MSG_MAX_SIZE];
 	Base64encode(buffer, msg, sizeof(msg));
 
 	ss << "eventDiscussMsg" << " ";
