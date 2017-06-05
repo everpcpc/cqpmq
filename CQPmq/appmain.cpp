@@ -337,14 +337,20 @@ CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t
 
 	stringstream ss;
 	char* buffer = new char[MSG_MAX_SIZE];
-	Base64encode(buffer, msg, strlen(msg));
 
 	ss << "eventGroupMsg" << " ";
 	ss << subType << " ";
 	ss << sendTime << " ";
 	ss << fromGroup << " ";
 	ss << fromQQ << " ";
-	ss << fromAnonymous << " ";
+	if (strlen(fromAnonymous) > 0) {
+		Base64encode(buffer, fromAnonymous, strlen(fromAnonymous));
+		ss << buffer << " ";
+	}
+	else {
+		ss << "0 ";  // fill place
+	}
+	Base64encode(buffer, msg, strlen(msg));
 	ss << buffer << " ";
 	ss << font << " ";
 
