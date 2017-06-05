@@ -27,22 +27,26 @@ char log_buf[1024];
 unsigned tid;
 HANDLE thd;
 
-Client btdclient;
+Client sendclient;
 string SERVER_ADDR = "127.0.0.1";
 int SERVER_PORT = 11300;
 
-string in_q = "coolq_in";
-string out_q = "coolq_out";
+string queue_in = "coolq(i)";
+string queue_out = "coolq(o)";
 
 
-bool ensure_mq_connected() {
-	if (btdclient.is_connected()) { return TRUE; }
+bool ensure_mq_connected(Client *client, bool watch) {
+	if (client->is_connected()) { return true; }
 
 	CQ_addLog(ac, CQLOG_WARNING, "net", "try reconnect");
 	try {
-		btdclient.reconnect();
-		btdclient.use(out_q);
-		btdclient.watch(in_q);
+		client->reconnect();
+		if (watch) {
+			client->watch(queue_in);
+		}
+		else {
+			client->use(queue_out);
+		}
 		CQ_addLog(ac, CQLOG_INFO, "net", "reconnect OK");
 
 	}
@@ -56,7 +60,7 @@ bool ensure_mq_connected() {
 }
 
 bool send_to_mq(const char* msg) {
-	if (!ensure_mq_connected()) {
+	if (!ensure_mq_connected(&sendclient, false)) {
 		CQ_addLog(ac, CQLOG_WARNING, "net", "no connection, will not send msg");
 		return false;
 	}
@@ -64,12 +68,12 @@ bool send_to_mq(const char* msg) {
 	sprintf_s(log_buf, "send: %s", msg);
 	CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 	try {
-		btdclient.put(msg);
+		sendclient.put(msg);
 	}
 	catch (runtime_error &e) {
 		sprintf_s(log_buf, "send failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
-		btdclient.disconnect();
+		sendclient.disconnect();
 		return false;
 	}
 
@@ -106,34 +110,49 @@ bool process_msg(string msg) {
 }
 
 unsigned __stdcall get_from_mq(void *args) {
+	Client getclient;
+	try {
+		getclient.connect(SERVER_ADDR, SERVER_PORT);
+		getclient.watch(queue_in);
+	}
+	catch (runtime_error &e) {
+		sprintf_s(log_buf, "get client connect failed: %s", e.what());
+		CQ_addLog(ac, CQLOG_ERROR, "net", log_buf);
+		return -1;
+	}
 
-	CQ_addLog(ac, CQLOG_DEBUG, "net", "start receiving from mq");
+	sprintf_s(log_buf, "get connected, watch: %s", queue_in.c_str());
+	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
+
 	while (true) {
-		if (!ensure_mq_connected()) {
+		if (!ensure_mq_connected(&getclient, true)) {
 			Sleep(10000);
 			continue;
 		}
 
 		Job job;
 		try {
-			btdclient.reserve(job, 60);  // 60s timeout for poll
+			getclient.reserve(job, 60);  // 60s timeout for poll
 		}
 		catch (runtime_error &e) {
 			sprintf_s(log_buf, "recv failed: %s", e.what());
 			CQ_addLog(ac, CQLOG_WARNING, "net", log_buf);
-			btdclient.disconnect();
+			getclient.disconnect();
 			Sleep(3000);
 			continue;
 		}
 
-		if (job.id() == 0) { continue; }
+		if (job.id() == 0) continue;
 
 		sprintf_s(log_buf, "recv: %s", job.body().c_str());
 		CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
 
 		if (process_msg(job.body())) {
-			btdclient.del(job);
-		};
+			getclient.del(job);
+		}
+		else {
+			CQ_addLog(ac, CQLOG_WARNING, "info", "process msg failed.");
+		}
 	}
 
 	return 0;
@@ -153,7 +172,6 @@ int read_config() {
 	}
 
 	int port = GetPrivateProfileIntA("btd", "port", -1, configFile.data());
-
 	if (port != -1) {
 		SERVER_PORT = port;
 	}
@@ -220,7 +238,7 @@ CQEVENT(int32_t, __eventStartup, 0)() {
 */
 CQEVENT(int32_t, __eventExit, 0)() {
 	TerminateThread(thd, 0);  // FIXME
-	btdclient.disconnect();
+	sendclient.disconnect();
 	return 0;
 }
 
@@ -238,9 +256,10 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 		CQ_addLog(ac, CQLOG_ERROR, "info", "cannot get current qq");
 		return -1;
 	}
-
 	sprintf_s(log_buf, "login with: %" PRId64, qq);
 	CQ_addLog(ac, CQLOG_DEBUG, "info", log_buf);
+	queue_out = to_string(qq) + "(o)";
+	queue_in = to_string(qq) + "(i)";
 
 	try {
 		read_config();
@@ -252,26 +271,16 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 
 	sprintf_s(log_buf, "try connect: %s:%d...", SERVER_ADDR.c_str(), SERVER_PORT);
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
-
-	out_q = to_string(qq) + "_out";
-	in_q = to_string(qq) + "_in";
-
-	if (btdclient.is_connected()) {
-		btdclient.disconnect();
-	}
-
 	try {
-		btdclient.connect(SERVER_ADDR, SERVER_PORT);
-		btdclient.use(out_q);
-		btdclient.watch(in_q);
+		sendclient.connect(SERVER_ADDR, SERVER_PORT);
+		sendclient.use(queue_out);
 	}
 	catch (runtime_error &e) {
-		sprintf_s(log_buf, "connect failed: %s", e.what());
+		sprintf_s(log_buf, "send client connect failed: %s", e.what());
 		CQ_addLog(ac, CQLOG_ERROR, "net", log_buf);
 		return -1;
 	}
-
-	sprintf_s(log_buf, "connect success, use: %s, listen: %s", out_q.c_str(), in_q.c_str());
+	sprintf_s(log_buf, "send connected, use: %s", queue_out.c_str());
 	CQ_addLog(ac, CQLOG_DEBUG, "net", log_buf);
 
 	thd = (HANDLE)_beginthreadex(NULL, 0, &get_from_mq, NULL, 0, &tid);
@@ -289,7 +298,7 @@ CQEVENT(int32_t, __eventEnable, 0)() {
 CQEVENT(int32_t, __eventDisable, 0)() {
 	enabled = false;
 	TerminateThread(thd, 0);  // FIXME
-	btdclient.disconnect();
+	sendclient.disconnect();
 	return 0;
 }
 
@@ -305,7 +314,7 @@ CQEVENT(int32_t, __eventPrivateMsg, 24)(int32_t subType, int32_t sendTime, int64
 
 	stringstream ss;
 	char* buffer = new char[MSG_MAX_SIZE];
-	Base64encode(buffer, msg, sizeof(msg));
+	Base64encode(buffer, msg, strlen(msg));
 
 	ss << "eventPrivateMsg" << " ";
 	ss << subType << " ";
@@ -328,7 +337,7 @@ CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t
 
 	stringstream ss;
 	char* buffer = new char[MSG_MAX_SIZE];
-	Base64encode(buffer, msg, sizeof(msg));
+	Base64encode(buffer, msg, strlen(msg));
 
 	ss << "eventGroupMsg" << " ";
 	ss << subType << " ";
@@ -353,7 +362,7 @@ CQEVENT(int32_t, __eventDiscussMsg, 32)(int32_t subType, int32_t sendTime, int64
 
 	stringstream ss;
 	char* buffer = new char[MSG_MAX_SIZE];
-	Base64encode(buffer, msg, sizeof(msg));
+	Base64encode(buffer, msg, strlen(msg));
 
 	ss << "eventDiscussMsg" << " ";
 	ss << subType << " ";
