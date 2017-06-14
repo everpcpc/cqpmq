@@ -151,7 +151,8 @@ unsigned __stdcall get_from_mq(void *args) {
 			getclient.del(job);
 		}
 		else {
-			CQ_addLog(ac, CQLOG_WARNING, "info", "process msg failed.");
+			CQ_addLog(ac, CQLOG_WARNING, "info", "process msg failed, buried.");
+			getclient.bury(job);
 		}
 	}
 
