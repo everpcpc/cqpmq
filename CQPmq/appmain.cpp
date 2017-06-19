@@ -351,8 +351,14 @@ CQEVENT(int32_t, __eventGroupMsg, 36)(int32_t subType, int32_t sendTime, int64_t
 	else {
 		ss << "0 ";  // fill place
 	}
-	Base64encode(buffer, msg, strlen(msg));
-	ss << buffer << " ";
+	if (strlen(msg) > 0) {
+		Base64encode(buffer, msg, strlen(msg));
+		ss << buffer << " ";
+	}
+	else {
+		ss << "0 ";  // fill place
+	}
+
 	ss << font << " ";
 
 	send_to_mq(ss.str().c_str());
